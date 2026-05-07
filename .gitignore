@@ -1,0 +1,13 @@
+dist/
+node_modules/
+coverage/
+
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+.env
+.env.local
+.env.dev
