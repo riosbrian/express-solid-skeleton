@@ -1,18 +1,24 @@
 import { envs } from "@/config/envs.js";
 import AppError from "@/shared/custom-error.js";
-import type { Request, Response, NextFunction } from "express";
+import type { NextFunction, Request, Response } from "express";
+import mongoose from "mongoose";
 
-interface NormalizedError {
+type ErrorResponse = {
   statusCode: number;
-  status: "fail" | "error";
+  status: string;
   message: string;
   stack?: string;
+};
+
+function sendError(res: Response, error: ErrorResponse) {
+  const { statusCode, ...responseBody } = error;
+  return res.status(statusCode).json(responseBody);
 }
 
-function handleMongoError(err: any): NormalizedError | null {
-  // Duplicate key (e.g. unique index violation)
+function handleMongoError(err: any): ErrorResponse | null {
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue ?? {})[0] ?? "unknown";
+
     return {
       statusCode: 409,
       status: "fail",
@@ -20,8 +26,7 @@ function handleMongoError(err: any): NormalizedError | null {
     };
   }
 
-  // Invalid ObjectId / bad cast
-  if (err.name === "CastError") {
+  if (err instanceof mongoose.Error.CastError) {
     return {
       statusCode: 400,
       status: "fail",
@@ -29,11 +34,11 @@ function handleMongoError(err: any): NormalizedError | null {
     };
   }
 
-  // Mongoose schema validation
-  if (err.name === "ValidationError") {
+  if (err instanceof mongoose.Error.ValidationError) {
     const errors = Object.values(err.errors)
-      .map((el: any) => el.message)
+      .map((el) => el.message)
       .join(". ");
+
     return {
       statusCode: 400,
       status: "fail",
@@ -44,62 +49,38 @@ function handleMongoError(err: any): NormalizedError | null {
   return null;
 }
 
-function normalizeError(err: any): NormalizedError {
-  // Known operational error
-  if (err instanceof AppError) {
-    return {
-      statusCode: err.statusCode,
-      status: err.status as "fail" | "error",
-      message: err.message,
-    };
-  }
+function normalizeError(err: Error): ErrorResponse {
+  const isOperational = err instanceof AppError;
 
-  // Mongoose errors
-  const mongoResult = handleMongoError(err);
-  if (mongoResult) return mongoResult;
-
-  // Unknown / programming error — don't leak details in production
   return {
-    statusCode: 500,
-    status: "error",
-    message:
-      envs.NODE_ENV === "production"
-        ? "Internal Server Error"
-        : (err.message ?? "Internal Server Error"),
+    statusCode: isOperational ? err.statusCode : 500,
+    status: isOperational ? err.status : "error",
+    message: isOperational ? err.message : "Internal Server Error",
+    ...(envs.NODE_ENV === "development" && {
+      stack: err.stack,
+    }),
   };
-}
-
-function buildResponseBody(
-  normalized: NormalizedError,
-  err: any,
-): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    status: normalized.status,
-    message: normalized.message,
-  };
-
-  if (envs.NODE_ENV === "development") {
-    body.stack = err?.stack ?? "No stack available";
-    // Surface the raw error name to aid debugging
-    body.errorName = err?.name;
-  }
-
-  return body;
 }
 
 export function errorHandler(
-  err: any,
+  err: unknown,
   _req: Request,
   res: Response,
   _next: NextFunction,
-): void {
-  // Always log unexpected errors server-side
-  if (!err?.isOperational) {
-    console.error("[Unhandled Error]", err);
+) {
+  console.error(err);
+
+  const mongoError = handleMongoError(err);
+  if (mongoError) {
+    return sendError(res, mongoError);
   }
 
-  const normalized = normalizeError(err);
-  const body = buildResponseBody(normalized, err);
+  if (err instanceof Error) {
+    return sendError(res, normalizeError(err));
+  }
 
-  res.status(normalized.statusCode).json(body);
+  return res.status(500).json({
+    status: "error",
+    message: "Internal Server Error",
+  });
 }
