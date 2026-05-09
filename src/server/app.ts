@@ -5,6 +5,8 @@ import express from "express";
 
 const app = express();
 
+app.set("trust proxy", 1);
+
 setSecurityMiddlewares(app);
 
 app.use(express.json({ limit: "10kb" }));
