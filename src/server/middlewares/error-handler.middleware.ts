@@ -1,52 +1,12 @@
+import type { ErrorResponse } from "@/config/constants.js";
 import { envs } from "@/config/envs.js";
+import { handleMongoError } from "@/db/mongodb/mongo-errors-handler.js";
 import AppError from "@/shared/custom-error.js";
 import type { NextFunction, Request, Response } from "express";
-import mongoose from "mongoose";
-
-type ErrorResponse = {
-  statusCode: number;
-  status: string;
-  message: string;
-  stack?: string;
-};
 
 function sendError(res: Response, error: ErrorResponse) {
   const { statusCode, ...responseBody } = error;
   return res.status(statusCode).json(responseBody);
-}
-
-function handleMongoError(err: any): ErrorResponse | null {
-  if (err.code === 11000) {
-    const field = Object.keys(err.keyValue ?? {})[0] ?? "unknown";
-
-    return {
-      statusCode: 409,
-      status: "fail",
-      message: `Duplicated value for field: ${field}`,
-    };
-  }
-
-  if (err instanceof mongoose.Error.CastError) {
-    return {
-      statusCode: 400,
-      status: "fail",
-      message: `Invalid value for field '${err.path}': ${err.value}`,
-    };
-  }
-
-  if (err instanceof mongoose.Error.ValidationError) {
-    const errors = Object.values(err.errors)
-      .map((el) => el.message)
-      .join(". ");
-
-    return {
-      statusCode: 400,
-      status: "fail",
-      message: `Validation failed: ${errors}`,
-    };
-  }
-
-  return null;
 }
 
 function normalizeError(err: Error): ErrorResponse {
